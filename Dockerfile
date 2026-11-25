@@ -35,6 +35,15 @@ ENV NGINX_VERSION=1.31.9 \
     FDFS_MODULE_VERSION=1.20 \
     TZ=Asia/Shanghai
 
+# 国内镜像源加速：Rocky 官方源在国内下载仅几十 KB/s，改用阿里云镜像
+# 如需使用官方源，构建时传 --build-arg DNF_MIRROR=
+ARG DNF_MIRROR=https://mirrors.aliyun.com/rockylinux
+RUN if [ -n "${DNF_MIRROR}" ]; then \
+        sed -i -e 's|^mirrorlist=|#mirrorlist=|' \
+               -e "s|^#baseurl=http://dl.rockylinux.org/\$contentdir|baseurl=${DNF_MIRROR}|" \
+               /etc/yum.repos.d/rocky*.repo; \
+    fi
+
 # 编译工具链与依赖库：perl 供 FastDFS 的 make.sh 改写 Makefile 使用，
 # pcre2/zlib/openssl-devel 分别对应 Nginx 的 rewrite/压缩/SSL 模块
 RUN dnf -y install \
@@ -117,12 +126,22 @@ ENV NGINX_VERSION=1.31.9 \
     FDFS_MODULE_VERSION=1.20 \
     TZ=Asia/Shanghai
 
-# 运行时依赖：pcre2/zlib/openssl-libs 供 Nginx 动态库，curl-minimal 供健康检查，tzdata 供时区
+# 国内镜像源加速（同 builder 阶段）
+ARG DNF_MIRROR=https://mirrors.aliyun.com/rockylinux
+RUN if [ -n "${DNF_MIRROR}" ]; then \
+        sed -i -e 's|^mirrorlist=|#mirrorlist=|' \
+               -e "s|^#baseurl=http://dl.rockylinux.org/\$contentdir|baseurl=${DNF_MIRROR}|" \
+               /etc/yum.repos.d/rocky*.repo; \
+    fi
+
+# 运行时依赖：pcre2/zlib/openssl-libs 供 Nginx 动态库，curl-minimal 供健康检查，
+# gettext 提供 envsubst（启动脚本渲染 ssl.conf 用），tzdata 供时区
 RUN dnf -y install \
         pcre2 \
         zlib \
         openssl-libs \
         curl-minimal \
+        gettext \
         tzdata \
     && dnf clean all \
     && rm -rf /var/cache/dnf \
@@ -149,14 +168,14 @@ COPY conf/start_nginx.sh /usr/local/nginx/conf/start_nginx.sh
 
 RUN chmod +x /usr/local/nginx/conf/start_nginx.sh \
     && ldconfig \
-    && mkdir -p /data/fastdfs_client
+    && mkdir -p /data/fastdfs_client /data/fastdfs_storage
 
 WORKDIR /usr/local/nginx
 
 EXPOSE 80
 
-# 健康检查：探测 Nginx 自身的 stub_status，避免与上游业务服务耦合
+# 健康检查：探测 Nginx 自身的 stub_status（独立 8080 端口，不与业务站点配置冲突）
 HEALTHCHECK --interval=30s --timeout=3s --retries=2 \
-    CMD curl -sf -o /dev/null http://127.0.0.1/status || exit 1
+    CMD curl -sf -o /dev/null http://127.0.0.1:8080/status || exit 1
 
 CMD ["./conf/start_nginx.sh"]
